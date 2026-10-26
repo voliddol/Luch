@@ -95,6 +95,44 @@ public class SettingsActivity extends Activity {
                         public void set(boolean on) { prefs.setKenBurns(on); }
                     });
         }
+        if (prefs.background() == Wallpaper.BEAM) {
+            action("Яркость луча", "На самом ярком луч может проходить по вкладкам сверху",
+                    Ambient.BRIGHTNESS_NAMES[prefs.beamBright()], new Runnable() {
+                        public void run() {
+                            choose("Яркость луча", Ambient.BRIGHTNESS_NAMES, prefs.beamBright(), new Pick() {
+                                public void pick(int i) {
+                                    prefs.setBeam(i, prefs.beamFrom(), prefs.beamColor(), prefs.flicker());
+                                }
+                            });
+                        }
+                    });
+            action("Откуда светит", "С какой стороны идёт свет проектора",
+                    Ambient.SOURCES[prefs.beamFrom()], new Runnable() {
+                        public void run() {
+                            choose("Откуда светит", Ambient.SOURCES, prefs.beamFrom(), new Pick() {
+                                public void pick(int i) {
+                                    prefs.setBeam(prefs.beamBright(), i, prefs.beamColor(), prefs.flicker());
+                                }
+                            });
+                        }
+                    });
+            action("Цвет луча", "Тёплый — как лампа старого кинопроектора, белый — как ксеноновая",
+                    Ambient.COLORS[prefs.beamColor()], new Runnable() {
+                        public void run() {
+                            choose("Цвет луча", Ambient.COLORS, prefs.beamColor(), new Pick() {
+                                public void pick(int i) {
+                                    prefs.setBeam(prefs.beamBright(), prefs.beamFrom(), i, prefs.flicker());
+                                }
+                            });
+                        }
+                    });
+            toggle("Мерцание плёнки", "Едва заметное подрагивание света, как у плёночного кинопроектора",
+                    prefs.flicker(), new Toggle() {
+                        public void set(boolean on) {
+                            prefs.setBeam(prefs.beamBright(), prefs.beamFrom(), prefs.beamColor(), on);
+                        }
+                    });
+        }
         toggle("Плёночное зерно", "Едва заметное живое зерно поверх фона, как у киноплёнки",
                 prefs.grain(), new Toggle() {
                     public void set(boolean on) { prefs.setGrain(on); }
@@ -243,6 +281,24 @@ public class SettingsActivity extends Activity {
                             return;
                         }
                         prefs.setIdleMode(which);
+                        build();
+                    }
+                })
+                .show();
+    }
+
+    private interface Pick {
+        void pick(int index);
+    }
+
+    /** A list with one choice; picking an item saves it and rebuilds the screen. */
+    private void choose(String title, String[] items, int checked, final Pick pick) {
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setSingleChoiceItems(items, checked, new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface d, int which) {
+                        pick.pick(which);
+                        d.dismiss();
                         build();
                     }
                 })

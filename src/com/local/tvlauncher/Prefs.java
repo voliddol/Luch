@@ -33,6 +33,10 @@ final class Prefs {
     private static final String GRAIN = "grain";
     private static final String ANIM_FPS = "anim_fps";
     private static final String MARGIN = "safe_margin";
+    private static final String BEAM_BRIGHT = "beam_bright";
+    private static final String BEAM_FROM = "beam_from";
+    private static final String BEAM_COLOR = "beam_color";
+    private static final String FLICKER = "flicker";
     private static final String BACKGROUND = "background";
     private static final String BACKGROUND_STAMP = "background_stamp";
     private static final String THEME = "theme";
@@ -270,9 +274,33 @@ final class Prefs {
         changed();
     }
 
-    /** One of the {@link Wallpaper} modes. */
+    // Projector beam look; indexes into the lists in {@link Ambient}.
+    int beamBright() {
+        return sp.getInt(BEAM_BRIGHT, 1);
+    }
+
+    int beamFrom() {
+        return sp.getInt(BEAM_FROM, 0);
+    }
+
+    int beamColor() {
+        return sp.getInt(BEAM_COLOR, 0);
+    }
+
+    /** Faint shutter flicker of a film projector in the beam. */
+    boolean flicker() {
+        return sp.getBoolean(FLICKER, true);
+    }
+
+    void setBeam(int bright, int from, int color, boolean flicker) {
+        sp.edit().putInt(BEAM_BRIGHT, bright).putInt(BEAM_FROM, from).putInt(BEAM_COLOR, color)
+                .putBoolean(FLICKER, flicker).putLong(BACKGROUND_STAMP, System.currentTimeMillis()).apply();
+        changed();
+    }
+
+    /** One of the {@link Wallpaper} modes. The projector beam is the signature look. */
     int background() {
-        return sp.getInt(BACKGROUND, Wallpaper.GLOW);
+        return sp.getInt(BACKGROUND, Wallpaper.BEAM);
     }
 
     void setBackground(int mode) {

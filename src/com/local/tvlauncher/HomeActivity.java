@@ -307,6 +307,7 @@ public class HomeActivity extends Activity {
             root.addView(bannerBg, new FrameLayout.LayoutParams(-1, -1));
         } else if (async && (mode == Wallpaper.BEAM || mode == Wallpaper.BOKEH)) {
             ambient = new Ambient(this, prefs.animFps(), mode == Wallpaper.BEAM, mode == Wallpaper.BOKEH, false);
+            ambient.beamStyle(prefs.beamBright(), prefs.beamFrom(), prefs.beamColor(), prefs.flicker());
             root.addView(ambient, new FrameLayout.LayoutParams(-1, -1));
         } else if (mode == Wallpaper.IMAGE && prefs.kenBurns()) {
             kenBurns = new ImageView(this);
