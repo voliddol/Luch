@@ -1,0 +1,16 @@
+# Build output
+build/
+*.apk
+
+# Signing key: never publish, updates must be signed with it
+*.jks
+
+# R8 name map: only for decoding crash reports, kept privately per release
+mapping.txt
+art/mapping-*.txt
+
+# Working files, not part of the project
+shots/
+shot_*.png
+art/logo-source-old.png
+*.idsig

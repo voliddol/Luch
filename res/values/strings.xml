@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Luch</string>
+    <string name="settings_name">Настройки Luch</string>
+    <string name="key_service_label">Luch: кнопка «Домой»</string>
+    <string name="key_service_desc">Перехватывает кнопку «Домой» на пульте и открывает Luch. Если появится оболочка производителя, сразу открывает Luch поверх неё. Больше ничего не читает и не отправляет.</string>
+</resources>
