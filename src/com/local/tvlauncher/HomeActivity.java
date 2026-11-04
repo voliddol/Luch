@@ -945,15 +945,19 @@ public class HomeActivity extends Activity {
             if (hdmi != null) dockApps.add(hdmi);
         }
         dockLabel.setText(noFavs ? "Приложения" : "Избранное");
-        int dockH = (int) Math.min(88, Ui.heightDp(this) * 0.125f);
         dock.removeAllViews();
-        fill(dock, dockApps, noFavs ? ROW_DOCK : ROW_FAV, dockH, 16);
+        fill(dock, dockApps, noFavs ? ROW_DOCK : ROW_FAV, tileH(), 16);
 
         // The grid is built only when its tab is open: less work on every return home.
         gridDirty = true;
         if (tab == TAB_APPS) buildGrid();
 
         if (!restoreFocus()) focusFirst();
+    }
+
+    /** Height of the tiles, the same in the dock and in the grid. */
+    private int tileH() {
+        return (int) Math.min(100, Ui.heightDp(this) * 0.14f);
     }
 
     private List<Apps.App> visible() {
@@ -980,7 +984,7 @@ public class HomeActivity extends Activity {
         gridDirty = false;
         grid.removeAllViews();
         List<Apps.App> all = visible();
-        int gridH = (int) Math.min(100, Ui.heightDp(this) * 0.14f);
+        int gridH = tileH();
         float tileW = gridH * 16 / 9f;
         int gap = 22;
         int cols = Math.max(1, (int) ((Ui.widthDp(this) - 96 + gap) / (tileW + gap)));
