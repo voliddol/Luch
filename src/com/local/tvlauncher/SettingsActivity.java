@@ -295,7 +295,7 @@ public class SettingsActivity extends Activity {
                                 : "Нужно, только если кнопка на пульте всё равно открывает старую оболочку",
                         service ? "Подключена" : "Не подключена", new Runnable() {
                             public void run() {
-                                if (service) turnOffService(); else openAccessibility();
+                                openAccessibility();
                             }
                         });
                 toggle("Быстрая загрузка", "Luch показывается сразу при включении, без вспышки старой оболочки",
@@ -832,7 +832,6 @@ public class SettingsActivity extends Activity {
 
     // ---------------------------------------------------------- accessibility
 
-    private static final String WRITE_SECURE = "android.permission.WRITE_SECURE_SETTINGS";
     /** Time for a screen to appear; a stub closes itself much sooner. */
     private static final long SCREEN_WAIT_MS = 2000;
 
@@ -852,32 +851,7 @@ public class SettingsActivity extends Activity {
     }
 
     private void openAccessibility() {
-        if (turnOnServiceDirectly()) {
-            Toast.makeText(this, "Готово: кнопка «Домой» подключена", Toast.LENGTH_LONG).show();
-            build();
-            return;
-        }
         tryScreen(accessibilityScreens(), 0);
-    }
-
-    /**
-     * Only an ADB-granted permission lets an app switch its own service on:
-     * adb shell pm grant com.local.tvlauncher android.permission.WRITE_SECURE_SETTINGS
-     */
-    private boolean turnOnServiceDirectly() {
-        String mine = new ComponentName(this, KeyService.class).flattenToString();
-        if (serviceEnabled(mine) || checkSelfPermission(WRITE_SECURE) != PackageManager.PERMISSION_GRANTED) {
-            return false;
-        }
-        try {
-            String on = Settings.Secure.getString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
-            Settings.Secure.putString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
-                    on == null || on.isEmpty() ? mine : on + ":" + mine);
-            Settings.Secure.putInt(getContentResolver(), Settings.Secure.ACCESSIBILITY_ENABLED, 1);
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
     }
 
     /**
@@ -956,30 +930,6 @@ public class SettingsActivity extends Activity {
                 .setComponent(ComponentName.unflattenFromString(flattened));
     }
 
-    /** With the ADB permission the service is removed at once; otherwise the user does it on the system screen. */
-    private void turnOffService() {
-        String mine = new ComponentName(this, KeyService.class).flattenToString();
-        if (checkSelfPermission(WRITE_SECURE) == PackageManager.PERMISSION_GRANTED) {
-            try {
-                String on = Settings.Secure.getString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
-                List<String> left = new ArrayList<>();
-                if (on != null) {
-                    for (String s : on.split(":")) {
-                        ComponentName c = ComponentName.unflattenFromString(s);
-                        if (c != null && !c.getPackageName().equals(getPackageName())) left.add(s);
-                    }
-                }
-                Settings.Secure.putString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
-                        android.text.TextUtils.join(":", left));
-                Toast.makeText(this, "Кнопка «Домой» отключена", Toast.LENGTH_LONG).show();
-                build();
-                return;
-            } catch (Exception ignored) {
-            }
-        }
-        tryScreen(accessibilityScreens(), 0);
-    }
-
     /**
      * Back to another home screen. While the key service is on it would still bring Luch up on
      * the Home key, so that goes first.
@@ -992,7 +942,7 @@ public class SettingsActivity extends Activity {
                             + getString(R.string.key_service_label)
                             + "», вернитесь сюда и нажмите «Другая оболочка» ещё раз.")
                     .setPositiveButton("Отключить", new DialogInterface.OnClickListener() {
-                        @Override public void onClick(DialogInterface d, int w) { turnOffService(); }
+                        @Override public void onClick(DialogInterface d, int w) { openAccessibility(); }
                     })
                     .setNegativeButton("Отмена", null)
                     .show();
@@ -1048,13 +998,14 @@ public class SettingsActivity extends Activity {
 
     /** The firmware opened nothing: simple steps first, the computer only as the last resort. */
     private void accessibilityHelp() {
+        boolean on = prefs.serviceOn();
         new AlertDialog.Builder(this)
-                .setTitle("Включите вручную")
+                .setTitle(on ? "Отключите вручную" : "Включите вручную")
                 .setMessage("На этом устройстве нужный экран не открывается сам. Это просто:\n\n"
                         + "1. Откройте настройки устройства.\n"
                         + "2. Найдите «Специальные возможности». Обычно они в разделе "
                         + "«Настройки устройства» или «Система».\n"
-                        + "3. Включите «" + getString(R.string.key_service_label) + "».")
+                        + "3. " + (on ? "Выключите" : "Включите") + " «" + getString(R.string.key_service_label) + "».")
                 .setPositiveButton("Открыть настройки", new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface d, int w) { openDeviceSettings(); }
                 })
@@ -1070,9 +1021,10 @@ public class SettingsActivity extends Activity {
                 .setTitle("Если пункта нет")
                 .setMessage("Luch работает и без этого. Откройте его из списка приложений или сделайте "
                         + "главным экраном: шаг 1 в этих настройках.\n\n"
-                        + "Для опытных: если на устройстве включён ADB, выполните один раз с компьютера\n"
-                        + "adb shell pm grant com.local.tvlauncher " + WRITE_SECURE + "\n"
-                        + "и снова нажмите шаг 2.")
+                        + "Для опытных: если на устройстве включён ADB, выполните с компьютера\n"
+                        + "adb shell settings put secure enabled_accessibility_services "
+                        + new ComponentName(this, KeyService.class).flattenToString() + "\n"
+                        + "adb shell settings put secure accessibility_enabled 1")
                 .setPositiveButton("Понятно", null)
                 .show();
     }
