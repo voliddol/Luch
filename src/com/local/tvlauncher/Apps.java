@@ -218,6 +218,22 @@ final class Apps {
         return out;
     }
 
+    /**
+     * Home screens the user may choose to replace. Never the settings, the setup wizard or the TV
+     * input app (it shows HDMI, and may declare HOME too): replacing those would break the device.
+     */
+    static List<ResolveInfo> replaceableHomes(Context ctx) {
+        List<ResolveInfo> out = new ArrayList<>();
+        for (ResolveInfo ri : homeApps(ctx)) {
+            String p = ri.activityInfo.packageName;
+            if (!p.contains("settings") && !p.contains("setup") && !p.contains("provision")
+                    && !p.contains("tvui")) {
+                out.add(ri);
+            }
+        }
+        return out;
+    }
+
     static String label(Context ctx, String pkg) {
         PackageManager pm = ctx.getPackageManager();
         try {

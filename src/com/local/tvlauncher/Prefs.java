@@ -2,9 +2,12 @@ package com.local.tvlauncher;
 
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.os.SystemClock;
+import android.provider.Settings;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -37,6 +40,12 @@ final class Prefs {
     private static final String BEAM_FROM = "beam_from";
     private static final String BEAM_COLOR = "beam_color";
     private static final String FLICKER = "flicker";
+    private static final String BEAM_DUST = "beam_dust";
+    private static final String BEAM_WIDTH = "beam_width";
+    private static final String START_TAB = "start_tab";
+    private static final String RETURN_AFTER_SERVICE = "return_after_service";
+    private static final String SETUP_DONE = "setup_done";
+    private static final String STEPS_HIDDEN = "steps_hidden";
     private static final String BACKGROUND = "background";
     private static final String BACKGROUND_STAMP = "background_stamp";
     private static final String THEME = "theme";
@@ -292,6 +301,37 @@ final class Prefs {
         return sp.getBoolean(FLICKER, true);
     }
 
+    /** Index into {@link Ambient#WIDTHS}. */
+    int beamWidth() {
+        return sp.getInt(BEAM_WIDTH, 1);
+    }
+
+    void setBeamWidth(int width) {
+        sp.edit().putInt(BEAM_WIDTH, width).putLong(BACKGROUND_STAMP, System.currentTimeMillis()).apply();
+        changed();
+    }
+
+    /** Index into {@link Ambient#DUST}. */
+    int beamDust() {
+        return sp.getInt(BEAM_DUST, 2);
+    }
+
+    void setBeamDust(int amount) {
+        sp.edit().putInt(BEAM_DUST, amount).putLong(BACKGROUND_STAMP, System.currentTimeMillis()).apply();
+        changed();
+    }
+
+    /** What the Home key opens; the order matches the tabs of the home screen. */
+    static final String[] START_TABS = {"Главная", "Приложения"};
+
+    int startTab() {
+        return sp.getInt(START_TAB, 0);
+    }
+
+    void setStartTab(int tab) {
+        sp.edit().putInt(START_TAB, tab).apply();
+    }
+
     void setBeam(int bright, int from, int color, boolean flicker) {
         sp.edit().putInt(BEAM_BRIGHT, bright).putInt(BEAM_FROM, from).putInt(BEAM_COLOR, color)
                 .putBoolean(FLICKER, flicker).putLong(BACKGROUND_STAMP, System.currentTimeMillis()).apply();
@@ -380,6 +420,52 @@ final class Prefs {
 
     void setEarlyBootAutoOff(boolean on) {
         sp.edit().putBoolean(EARLY_AUTO_OFF, on).commit();
+    }
+
+    // ----------------------------------------------------------------- setup
+
+    /** The system's default home screen is this launcher. */
+    boolean isDefaultHome() {
+        ResolveInfo ri = ctx.getPackageManager().resolveActivity(
+                new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), PackageManager.MATCH_DEFAULT_ONLY);
+        return ri != null && ri.activityInfo != null && ctx.getPackageName().equals(ri.activityInfo.packageName);
+    }
+
+    boolean serviceOn() {
+        String s = Settings.Secure.getString(ctx.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        return s != null && s.contains(ctx.getPackageName() + "/");
+    }
+
+    /** False while the user is only looking around: the system still opens another launcher on Home. */
+    boolean isSetUp() {
+        return isDefaultHome() || serviceOn();
+    }
+
+    /** The setup steps were completed once; they stay hidden until this is no longer the home screen. */
+    boolean setupDone() {
+        return sp.getBoolean(SETUP_DONE, false);
+    }
+
+    void setSetupDone(boolean done) {
+        sp.edit().putBoolean(SETUP_DONE, done).apply();
+    }
+
+    /** The user hid the setup steps by hand; they stay hidden until asked for again. */
+    boolean stepsHidden() {
+        return sp.getBoolean(STEPS_HIDDEN, false);
+    }
+
+    void setStepsHidden(boolean hidden) {
+        sp.edit().putBoolean(STEPS_HIDDEN, hidden).apply();
+    }
+
+    /** The key service brings this launcher back as soon as the user has switched it on. */
+    boolean returnAfterService() {
+        return sp.getBoolean(RETURN_AFTER_SERVICE, false);
+    }
+
+    void setReturnAfterService(boolean on) {
+        sp.edit().putBoolean(RETURN_AFTER_SERVICE, on).commit();
     }
 
     // ------------------------------------------------------------ early boot

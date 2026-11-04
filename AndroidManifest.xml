@@ -1,13 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.local.tvlauncher"
-    android:versionCode="4"
-    android:versionName="1.2">
+    android:versionCode="5"
+    android:versionName="1.3">
 
     <!-- Network type next to the clock. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Only to read a picture the user picks as the background. -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <!-- Never granted on install. Only if the user grants it over ADB, the settings button
+         switches the Home key service on directly, for firmwares without an accessibility screen. -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
 
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
@@ -54,6 +57,21 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.HOME" />
                 <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- The app list entry: shows the home screen without changing anything in the system. -->
+        <activity
+            android:name=".ViewActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+                <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 

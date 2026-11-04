@@ -66,7 +66,13 @@ final class Ambient extends View {
     private float spread;
     private float sx, sy, ux, uy, len, angle;
     private final Paint light = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
-    private final float[] dx = new float[70], dy = new float[70], ds = new float[70], dp = new float[70];
+    static final float[] WIDTHS = {0.65f, 1f, 1.45f};
+    static final String[] WIDTH_NAMES = {"Узкий", "Обычный", "Широкий"};
+    private float widthScale = 1f;
+    static final int[] DUST = {0, 30, 70, 150};
+    static final String[] DUST_NAMES = {"Нет", "Мало", "Обычно", "Много"};
+    private int dustCount = DUST[2];
+    private final float[] dx = new float[150], dy = new float[150], ds = new float[150], dp = new float[150];
 
     // Grain: a small noise tile repeated over the screen, shifted every grain frame.
     private Paint grainPaint;
@@ -107,6 +113,17 @@ final class Ambient extends View {
         this.flicker = flicker;
         light.setColorFilter(new PorterDuffColorFilter(beamColor, PorterDuff.Mode.SRC_IN));
         cone = null;
+    }
+
+    /** How wide the cone opens; {@code width} is an index into {@link #WIDTHS}. */
+    void beamWidth(int width) {
+        widthScale = WIDTHS[Math.max(0, Math.min(WIDTHS.length - 1, width))];
+        cone = null;
+    }
+
+    /** How many dust specks float in the beam; {@code amount} is an index into {@link #DUST}. */
+    void beamDust(int amount) {
+        dustCount = DUST[Math.max(0, Math.min(DUST.length - 1, amount))];
     }
 
     /** Start or stop the animation loop. */
@@ -181,9 +198,9 @@ final class Ambient extends View {
         float tx, ty;
         // The lens sits above the screen, so only the light is seen, already spread out.
         // Straight down the beam is short, so it opens wider to fill the screen.
-        if (source == 1) { sx = w * 0.5f; sy = -h * 0.25f; tx = w * 0.5f; ty = h; spread = 0.6f; }
-        else if (source == 2) { sx = w * 0.06f; sy = -h * 0.12f; tx = w * 0.8f; ty = h; spread = 0.26f; }
-        else { sx = w * 0.94f; sy = -h * 0.12f; tx = w * 0.2f; ty = h; spread = 0.26f; }
+        if (source == 1) { sx = w * 0.5f; sy = -h * 0.25f; tx = w * 0.5f; ty = h; spread = 0.6f * widthScale; }
+        else if (source == 2) { sx = w * 0.06f; sy = -h * 0.12f; tx = w * 0.8f; ty = h; spread = 0.26f * widthScale; }
+        else { sx = w * 0.94f; sy = -h * 0.12f; tx = w * 0.2f; ty = h; spread = 0.26f * widthScale; }
         float vx = tx - sx, vy = ty - sy, d = (float) Math.hypot(vx, vy);
         ux = vx / d;
         uy = vy / d;
@@ -279,7 +296,7 @@ final class Ambient extends View {
         // Dust: drifting specks that glint only inside the beam.
         Paint dot = paint;
         dot.setColor(beamColor);
-        for (int i = 0; i < dx.length; i++) {
+        for (int i = 0; i < dustCount; i++) {
             float x = ((dx[i] + t * ds[i] * 0.5f) % 1f) * w;
             float y = ((dy[i] + 0.02f * (float) Math.sin(t * 0.4f + dp[i]) + 1f) % 1f) * h;
             float inBeam = beamStrength(x, y);

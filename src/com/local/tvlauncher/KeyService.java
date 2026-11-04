@@ -47,6 +47,11 @@ public class KeyService extends AccessibilityService {
     protected void onServiceConnected() {
         prefs = new Prefs(this);
         registerReceiver(unlocked, new IntentFilter(Intent.ACTION_USER_UNLOCKED));
+        if (prefs.returnAfterService()) {
+            prefs.setReturnAfterService(false);
+            Toast.makeText(this, "Готово: кнопка «Домой» подключена", Toast.LENGTH_LONG).show();
+            openHome();
+        }
     }
 
     @Override

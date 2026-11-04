@@ -182,7 +182,7 @@ public class HomeActivity extends Activity {
 
         idleOverlay = idleOverlay();
         root.addView(idleOverlay, new FrameLayout.LayoutParams(-1, -1));
-        setTab(TAB_HOME, false);
+        setTab(prefs.startTab(), false);
 
         // Show the last known apps at once; the fresh list is loaded in the background.
         List<Apps.App> cached = Apps.cached();
@@ -252,7 +252,7 @@ public class HomeActivity extends Activity {
         focusTag = null;
         if (dock != null) {
             wake();
-            setTab(TAB_HOME, true);
+            setTab(prefs.startTab(), true);
         }
     }
 
@@ -308,6 +308,8 @@ public class HomeActivity extends Activity {
         } else if (async && (mode == Wallpaper.BEAM || mode == Wallpaper.BOKEH)) {
             ambient = new Ambient(this, prefs.animFps(), mode == Wallpaper.BEAM, mode == Wallpaper.BOKEH, false);
             ambient.beamStyle(prefs.beamBright(), prefs.beamFrom(), prefs.beamColor(), prefs.flicker());
+            ambient.beamDust(prefs.beamDust());
+            ambient.beamWidth(prefs.beamWidth());
             root.addView(ambient, new FrameLayout.LayoutParams(-1, -1));
         } else if (mode == Wallpaper.IMAGE && prefs.kenBurns()) {
             kenBurns = new ImageView(this);
@@ -1189,7 +1191,8 @@ public class HomeActivity extends Activity {
 
     private void maybeAutostart() {
         final String comp = prefs.autostart();
-        if (comp.isEmpty()) return;
+        // Just looking around: opening some other app would only get in the way.
+        if (comp.isEmpty() || !prefs.isSetUp()) return;
         if (SystemClock.elapsedRealtime() > AUTOSTART_WINDOW_MS) return;
         if (!prefs.claimAutostartForThisBoot()) return;
         handler.postDelayed(new Runnable() {
