@@ -142,6 +142,36 @@ final class Apps {
         return new App(HDMI, "HDMI", null, null, true);
     }
 
+    /** Autostart follows the application when an update replaces its launcher alias. */
+    static boolean sameAutostartApp(String selected, String component) {
+        if (selected.isEmpty()) return false;
+        if (selected.equals(component)) return true;
+        ComponentName old = ComponentName.unflattenFromString(selected);
+        ComponentName current = ComponentName.unflattenFromString(component);
+        return old != null && current != null && old.getPackageName().equals(current.getPackageName());
+    }
+
+    static boolean launchOnBoot(Context ctx, String selected) {
+        if (HDMI.equals(selected)) return launchHdmi(ctx, false);
+        ComponentName old = ComponentName.unflattenFromString(selected);
+        if (old == null || old.getPackageName().equals(ctx.getPackageName())) return false;
+        try {
+            PackageManager pm = ctx.getPackageManager();
+            String pkg = old.getPackageName();
+            Intent intent = pm.getLeanbackLaunchIntentForPackage(pkg);
+            if (intent == null) intent = pm.getLaunchIntentForPackage(pkg);
+            if (intent == null || intent.getComponent() == null
+                    || !pkg.equals(intent.getComponent().getPackageName())) return false;
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+            if (!start(ctx, intent, false)) return false;
+            new Prefs(ctx).countLaunch(intent.getComponent().flattenToShortString());
+            return true;
+        } catch (RuntimeException unavailable) {
+            // A package can disappear or be replaced between resolution and launch.
+            return false;
+        }
+    }
+
     static boolean launch(Context ctx, App app) {
         return launch(ctx, app.component);
     }
@@ -149,7 +179,7 @@ final class Apps {
     static boolean launch(Context ctx, String component) {
         Intent intent;
         if (HDMI.equals(component)) {
-            return launchHdmi(ctx);
+            return launchHdmi(ctx, true);
         }
         ComponentName cn = ComponentName.unflattenFromString(component);
         if (cn == null) return false;
@@ -165,12 +195,12 @@ final class Apps {
      * Switches the projector to HDMI the same way the stock source app does
      * (com.hisilicon.tvui with SourceName 9). Falls back to the stock source picker.
      */
-    private static boolean launchHdmi(Context ctx) {
+    private static boolean launchHdmi(Context ctx, boolean notify) {
         Intent direct = hdmiIntent(ctx);
         if (direct != null && start(ctx, direct, false)) return true;
         Intent picker = sourcePickerIntent(ctx);
         if (picker != null && start(ctx, picker, false)) return true;
-        Toast.makeText(ctx, "Не удалось переключиться на HDMI", Toast.LENGTH_LONG).show();
+        if (notify) Toast.makeText(ctx, "Не удалось переключиться на HDMI", Toast.LENGTH_LONG).show();
         return false;
     }
 

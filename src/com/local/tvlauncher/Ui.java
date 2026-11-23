@@ -225,13 +225,14 @@ final class Ui {
      * A 16:9 app tile {@code hDp} tall. TV apps show their banner; others show the icon with the
      * name inside. On focus it grows and gets an accent frame; {@code onFocus} is told about it too.
      */
-    static FrameLayout tile(Context c, Apps.App app, int hDp, final View.OnFocusChangeListener onFocus) {
+    static FrameLayout tile(Context c, Apps.App app, int hDp, boolean hideNames, final View.OnFocusChangeListener onFocus) {
         final FrameLayout card = new FrameLayout(c);
         float radius = hDp < 100 ? 12 : 16;
         card.setBackground(rounded(c, CARD, radius));
         card.setClipToOutline(true);
         card.setFocusable(true);
-        card.setFocusableInTouchMode(true);
+        // D-pad focus and direct pointer activation must both work on the first press.
+        card.setContentDescription(app.label);
         StateListDrawable fg = new StateListDrawable();
         fg.addState(new int[]{android.R.attr.state_focused}, outline(c, radius));
         fg.addState(new int[]{}, new ColorDrawable(Color.TRANSPARENT));
@@ -250,17 +251,20 @@ final class Ui {
                 ImageView icon = new ImageView(c);
                 icon.setImageDrawable(app.icon);
                 icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                int s = dp(c, hDp * 0.4f);
+                int s = dp(c, hDp * (hideNames ? 0.65f : 0.4f));
                 box.addView(icon, new LinearLayout.LayoutParams(s, s));
             }
-            TextView name = app.icon != null ? text(c, hDp < 100 ? 12 : 14, TEXT, false)
-                    : light(c, hDp * 0.24f, TEXT);
-            name.setText(app.label);
-            name.setSingleLine(true);
-            name.setEllipsize(TextUtils.TruncateAt.END);
-            name.setGravity(Gravity.CENTER);
-            name.setPadding(dp(c, 8), dp(c, 5), dp(c, 8), 0);
-            box.addView(name, new LinearLayout.LayoutParams(-1, -2));
+            if (!hideNames || app.icon == null) {
+                TextView name = app.icon != null ? text(c, hDp < 100 ? 12 : 14, TEXT, false)
+                        : light(c, hDp * 0.24f, TEXT);
+                name.setText(hideNames && !app.label.isEmpty()
+                        ? app.label.substring(0, app.label.offsetByCodePoints(0, 1)) : app.label);
+                name.setSingleLine(true);
+                name.setEllipsize(TextUtils.TruncateAt.END);
+                name.setGravity(Gravity.CENTER);
+                name.setPadding(dp(c, 8), dp(c, 5), dp(c, 8), 0);
+                box.addView(name, new LinearLayout.LayoutParams(-1, -2));
+            }
             card.addView(box, new FrameLayout.LayoutParams(-1, -1));
         }
 

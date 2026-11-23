@@ -25,6 +25,7 @@ import android.widget.Toast;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -81,8 +82,8 @@ public class SettingsActivity extends Activity {
         list.addView(title);
 
         if (prefs.selfDisabled()) {
-            note("⚠ Лаунчер несколько раз упал и сам отключился как главный экран, чтобы не мешать "
-                    + "работе проектора. Перехват кнопки «Домой» тоже приостановлен.");
+            note("Luch приостановлен после сбоя. Android может открыть другую оболочку. "
+                    + "Если других оболочек нет, кнопка «Домой» ведёт в настройки устройства.");
             action("Вернуть лаунчер", "Снова сделать его главным экраном (без быстрой загрузки)", null,
                     new Runnable() { public void run() {
                         prefs.setSelfDisabled(false);
@@ -90,11 +91,16 @@ public class SettingsActivity extends Activity {
                         build();
                         makeDefault(false);
                     } });
+            action("Системные настройки", null, null, new Runnable() {
+                public void run() { openDeviceSettings(); }
+            });
+            list.findViewWithTag(0).requestFocus();
+            return;
         }
 
         // ---------------------------------------------------------------- setup
-        boolean home = isOurHomeDefault();
         final boolean service = prefs.serviceOn();
+        boolean home = prefs.isDefaultHome();
         if (!home) prefs.setSetupDone(false);
         else if (prefs.earlyBoot()) prefs.setSetupDone(true);
         final boolean done = prefs.setupDone() || prefs.stepsHidden();
@@ -117,8 +123,7 @@ public class SettingsActivity extends Activity {
                     public void run() { openAccessibility(); }
                 });
         toggle("3. Быстрая загрузка",
-                "Luch показывается сразу при включении, без вспышки старой оболочки. "
-                        + "Если он упадёт при загрузке 3 раза, режим выключится сам",
+                "Luch может открыться до разблокировки. При сбое запуска он уступит главный экран Android",
                 prefs.earlyBoot(), new Toggle() {
                     public void set(boolean on) {
                         if (on) confirmEarlyBoot(); else switchEarlyBoot(false);
@@ -150,10 +155,13 @@ public class SettingsActivity extends Activity {
                     Ui.THEMES[Math.min(prefs.theme(), Ui.THEMES.length - 1)], new Runnable() {
                         public void run() { pickTheme(); }
                     });
-            action("Фон", "Своя картинка: положите её в «Загрузки» (с флешки или по сети) "
-                            + "и выберите здесь", Wallpaper.MODES[prefs.background()], new Runnable() {
+            action("Фон", "Анимация, картинка или видео с устройства",
+                    Wallpaper.MODES[prefs.background()], new Runnable() {
                         public void run() { pickBackground(); }
                     });
+            if (prefs.background() == Wallpaper.VIDEO) {
+                action("Сменить видеообои", "Видео воспроизводится по кругу без звука", null, () -> videoPicker().open());
+            }
             if (prefs.background() == Wallpaper.IMAGE) {
                 toggle("Медленный наезд", "Картинка очень медленно приближается и смещается, как в документальном кино",
                         prefs.kenBurns(), new Toggle() {
@@ -242,6 +250,15 @@ public class SettingsActivity extends Activity {
                             });
                         }
                     });
+            toggle("Скрыть названия приложений", "Убрать подписи плиток и крупное название выбранного приложения",
+                    prefs.hideNames(), prefs::setHideNames);
+            action("Размер плиток", "Сколько приложений помещается в одном ряду на обеих вкладках",
+                    Prefs.TILE_SIZES[prefs.tileSize()], () ->
+                            choose("Размер плиток", Prefs.TILE_SIZES, prefs.tileSize(), prefs::setTileSize));
+            toggle("Два ряда приложений", "На главном экране и в разделе «Часто открываете»",
+                    prefs.twoRows(), prefs::setTwoRows);
+            toggle("Температура устройства", "Рядом с Wi-Fi появится показание с названием датчика. Если градусов нет, возможен системный статус нагрева.",
+                    prefs.showTemperature(), prefs::setShowTemperature);
             if (Apps.hdmi(this) != null) {
                 toggle("Плитка HDMI", "Плитка в нижнем ряду: сразу переключает проектор на вход HDMI, "
                                 + "например на приставку или ноутбук",
@@ -283,8 +300,9 @@ public class SettingsActivity extends Activity {
                     }
                 });
             }
-            if (done && !home) {
-                action("Сделать Luch главным экраном", "Сейчас главный экран: " + defaultHomeSummary(),
+            if (done) {
+                action(home ? "Главный экран Android" : "Сделать Luch главным экраном",
+                        "Сейчас главный экран: " + defaultHomeSummary(),
                         null, new Runnable() { public void run() { makeDefault(false); } });
             }
             action("Другая оболочка", "Сейчас главный экран: " + defaultHomeSummary()
@@ -314,7 +332,7 @@ public class SettingsActivity extends Activity {
             }
             String auto = prefs.autostart();
             action("Автозапуск при включении",
-                    "Это приложение откроется само сразу после включения проектора",
+                    "Выбранное приложение откроется при первом появлении Luch после перезагрузки и разблокировки",
                     auto.isEmpty() ? "нет" : Apps.labelOfComponent(this, auto), new Runnable() {
                         public void run() { pickAutostart(); }
                     });
@@ -420,6 +438,7 @@ public class SettingsActivity extends Activity {
                     @Override public void onClick(DialogInterface d, int which) {
                         d.dismiss();
                         if (which == Wallpaper.IMAGE) pickImage();
+                        else if (which == Wallpaper.VIDEO) videoPicker().open();
                         else {
                             prefs.setBackground(which);
                             build();
@@ -430,6 +449,12 @@ public class SettingsActivity extends Activity {
     }
 
     private static final int REQ_STORAGE = 7;
+    private VideoPicker videoPicker;
+
+    private VideoPicker videoPicker() {
+        if (videoPicker == null) videoPicker = new VideoPicker(this, prefs, this::build);
+        return videoPicker;
+    }
 
     private void pickImage() {
         if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
@@ -487,6 +512,10 @@ public class SettingsActivity extends Activity {
 
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
+        if (code == VideoPicker.READ_FILES) {
+            videoPicker().storageResult(results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED);
+            return;
+        }
         boolean granted = results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED;
         if (code == REQ_SLIDES) {
             if (granted) {
@@ -518,11 +547,11 @@ public class SettingsActivity extends Activity {
     private void confirmEarlyBoot() {
         new AlertDialog.Builder(this)
                 .setTitle("Включить быструю загрузку?")
-                .setMessage("При включении проектора сразу будет показан этот лаунчер, а оболочка "
-                        + "производителя запускаться не будет: ни её экрана, ни её рекламы.\n\n"
-                        + "Функции прошивки от неё не зависят: источники, автофокус, трапеция и "
-                        + "трансляция работают отдельными приложениями.\n\n"
-                        + "Если лаунчер 3 раза упадёт при загрузке, режим выключится сам.")
+                .setMessage("Luch сможет открываться раньше при включении проектора. Какой экран появится "
+                        + "первым, зависит от прошивки.\n\n"
+                        + "После смены режима Android может снова предложить выбрать главный экран. "
+                        + "Чтобы открывался Luch, выберите его и нажмите «Всегда».\n\n"
+                        + "При сбое запуска Luch выключит быструю загрузку и уступит главный экран Android.")
                 .setPositiveButton("Включить", new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface d, int w) { switchEarlyBoot(true); }
                 })
@@ -531,12 +560,12 @@ public class SettingsActivity extends Activity {
     }
 
     private void switchEarlyBoot(boolean on) {
-        if (prefs.selfDisabled()) prefs.setSelfDisabled(false);
+        if (prefs.selfDisabled()) return;
         prefs.setEarlyBoot(on);
         prefs.setEarlyBootAutoOff(false);
         prefs.clearCrashes();
         build();
-        if (isOurHomeDefault()) {
+        if (prefs.isDefaultHome()) {
             Toast.makeText(this, on ? "Быстрая загрузка включена" : "Быстрая загрузка выключена",
                     Toast.LENGTH_LONG).show();
         } else {
@@ -569,31 +598,38 @@ public class SettingsActivity extends Activity {
         String pkg = ri == null || ri.activityInfo == null ? "android" : ri.activityInfo.packageName;
         String prefix = afterToggle ? "Режим переключён.\n\n" : "";
 
-        if (pkg.equals(getPackageName()) && ri.activityInfo.name.equals(mine.getClassName())) {
-            new AlertDialog.Builder(this)
-                    .setTitle("Главный экран")
-                    .setMessage(prefix + "Luch уже главный экран. Больше ничего делать не нужно.")
-                    .setPositiveButton("Хорошо", null)
-                    .show();
-            return;
-        }
-
         final Intent homeSettings = new Intent(Settings.ACTION_HOME_SETTINGS);
         final boolean hasHomeSettings = resolves(homeSettings);
+        if (pkg.equals(getPackageName()) && ri.activityInfo.name.equals(mine.getClassName())) {
+            if (requestHomeRole()) return;
+            AlertDialog.Builder status = new AlertDialog.Builder(this)
+                    .setTitle("Главный экран")
+                    .setMessage(prefix + "Сейчас Android указывает Luch."
+                            + (hasHomeSettings ? " Если выбор появляется снова, проверьте его в настройках Android." : ""))
+                    .setPositiveButton("Хорошо", null);
+            if (hasHomeSettings) {
+                status.setNeutralButton("Открыть выбор", new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface d, int w) { open(homeSettings); }
+                });
+            }
+            status.show();
+            return;
+        }
 
         // Android 10+: the official one-tap way, a system "make it the home app?" question.
         // Not for a system launcher with a raised priority: it would still win afterwards.
         if (Build.VERSION.SDK_INT >= 29 && (ri == null || ri.priority <= 0) && requestHomeRole()) return;
 
         if ("android".equals(pkg)) {
-            // Nothing is chosen: the system chooser appears when the home screen is requested.
+            // The Home settings page can save the choice even if the current HOME resolves to a chooser.
             new AlertDialog.Builder(this)
                     .setTitle("Сделать главным экраном")
-                    .setMessage(prefix + "Сейчас откроется окно выбора главного экрана.\n\n"
-                            + "Выберите «Luch» и нажмите «Всегда».")
+                    .setMessage(prefix + (hasHomeSettings ? "В системных настройках выберите «Luch»."
+                            : "Выберите «Luch» и нажмите «Всегда»."))
                     .setPositiveButton("Открыть выбор", new DialogInterface.OnClickListener() {
                         @Override public void onClick(DialogInterface d, int w) {
-                            open(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+                            if (hasHomeSettings) open(homeSettings);
+                            else open(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
                                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
                         }
                     })
@@ -607,9 +643,9 @@ public class SettingsActivity extends Activity {
         AlertDialog.Builder b = new AlertDialog.Builder(this).setTitle("Сделать главным экраном");
         if (ri.priority > 0) {
             // A system launcher with a raised priority wins regardless of the user's choice.
-            b.setMessage(prefix + "Сейчас главный экран — «" + otherName + "». Это системная оболочка "
-                    + "с повышенным приоритетом: Android выбирает её всегда, и сменить её можно только "
-                    + "через ADB.\n\n" + adbHint(mine, other));
+            b.setMessage(prefix + "Прошивка отдаёт приоритет оболочке «" + otherName + "». "
+                    + "Luch можно открывать из списка приложений. Если в настройках проектора "
+                    + "доступны специальные возможности, можно подключить кнопку «Домой» в Luch.");
             b.setPositiveButton("Понятно", null);
         } else if (hasHomeSettings) {
             b.setMessage(prefix + "Сейчас главный экран — «" + otherName + "».\n\n"
@@ -635,7 +671,8 @@ public class SettingsActivity extends Activity {
                     + "1. Нажмите «Открыть " + otherName + "» → «Открывать по умолчанию» или "
                     + "«Очистить действия по умолчанию».\n"
                     + "2. Вернитесь сюда и снова нажмите шаг 1.\n\n"
-                    + "Или с компьютера, одной командой:\n" + adbHint(mine, null));
+                    + "Или с компьютера, одной командой:\nadb shell cmd package set-home-activity "
+                    + mine.flattenToShortString());
             b.setPositiveButton("Открыть " + otherName, new DialogInterface.OnClickListener() {
                 @Override public void onClick(DialogInterface d, int w) {
                     open(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -654,7 +691,9 @@ public class SettingsActivity extends Activity {
         if (Build.VERSION.SDK_INT < 29) return false;
         try {
             RoleManager rm = getSystemService(RoleManager.class);
-            if (rm == null || !rm.isRoleAvailable(RoleManager.ROLE_HOME)) return false;
+            // The role belongs to a package. After a fast-boot toggle Android may still report
+            // that we hold it while the component it used for HOME is already disabled.
+            if (rm == null || !rm.isRoleAvailable(RoleManager.ROLE_HOME) || rm.isRoleHeld(RoleManager.ROLE_HOME)) return false;
             Intent ask = rm.createRequestRoleIntent(RoleManager.ROLE_HOME);
             if (!resolves(ask)) return false;
             startActivityForResult(ask, REQ_HOME_ROLE);
@@ -667,13 +706,13 @@ public class SettingsActivity extends Activity {
     @Override
     protected void onActivityResult(int code, int result, Intent data) {
         super.onActivityResult(code, result, data);
+        if (code == VideoPicker.OPEN_DOCUMENT) {
+            if (result == RESULT_OK && data != null) videoPicker().documentSelected(data);
+            return;
+        }
         if (code != REQ_HOME_ROLE) return;
         build();
-        ResolveInfo ri = currentHome();
-        boolean done = ri != null && ri.activityInfo != null
-                && ri.activityInfo.packageName.equals(getPackageName())
-                && ri.activityInfo.name.equals(prefs.home().getClassName());
-        if (done) {
+        if (prefs.isDefaultHome()) {
             Toast.makeText(this, "Готово: Luch теперь главный экран", Toast.LENGTH_LONG).show();
         } else {
             // Declined, or the system remembered "don't ask again": fall back to the step-by-step way.
@@ -693,30 +732,32 @@ public class SettingsActivity extends Activity {
         }
     }
 
-    private String adbHint(ComponentName mine, String disable) {
-        String s = "adb shell cmd package set-home-activity " + mine.flattenToShortString();
-        if (disable != null) s = "adb shell pm disable-user --user 0 " + disable + "\n" + s;
-        return s;
-    }
-
     private void pickAutostart() {
-        final List<Apps.App> apps = Apps.load(this);
+        List<Apps.App> apps = new ArrayList<>(Apps.load(this));
+        Apps.App hdmi = Apps.hdmi(this);
+        if (hdmi != null) apps.add(hdmi);
         final List<String> labels = new ArrayList<>();
+        final List<String> targets = new ArrayList<>();
         labels.add("Не запускать ничего");
+        targets.add("");
         int checked = 0;
-        String cur = prefs.autostart();
-        for (int i = 0; i < apps.size(); i++) {
-            labels.add(apps.get(i).label);
-            if (apps.get(i).component.equals(cur)) checked = i + 1;
+        String selected = prefs.autostart();
+        for (Apps.App app : apps) {
+            if (Apps.sameAutostartApp(selected, app.component)) checked = targets.size();
+            labels.add(app.label);
+            targets.add(app.component);
+        }
+        if (!selected.isEmpty() && checked == 0) {
+            checked = targets.size();
+            labels.add(Apps.labelOfComponent(this, selected) + " (сейчас недоступно)");
+            targets.add(selected);
         }
         new AlertDialog.Builder(this)
                 .setTitle("Автозапуск при включении")
-                .setSingleChoiceItems(labels.toArray(new String[0]), checked, new DialogInterface.OnClickListener() {
-                    @Override public void onClick(DialogInterface d, int which) {
-                        prefs.setAutostart(which == 0 ? "" : apps.get(which - 1).component);
-                        d.dismiss();
-                        build();
-                    }
+                .setSingleChoiceItems(labels.toArray(new String[0]), checked, (dialog, which) -> {
+                    prefs.setAutostart(targets.get(which));
+                    dialog.dismiss();
+                    build();
                 })
                 .show();
     }
@@ -851,6 +892,24 @@ public class SettingsActivity extends Activity {
     }
 
     private void openAccessibility() {
+        // Classic Android TV registers this action, then immediately finishes its OEM link.
+        // The same section is accessible through the normal device preferences.
+        ResolveInfo direct = getPackageManager().resolveActivity(
+                new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS), PackageManager.MATCH_DEFAULT_ONLY);
+        if (direct != null && direct.activityInfo != null
+                && "com.android.tv.settings".equals(direct.activityInfo.packageName)
+                && "com.android.tv.settings.oemlink.AccessibilitySettingsActivity".equals(direct.activityInfo.name)) {
+            try {
+                android.content.res.Resources res = getPackageManager().getResourcesForApplication(direct.activityInfo.packageName);
+                int flavor = res.getIdentifier("config_tvSettingsFlavor", "string", direct.activityInfo.packageName);
+                if (flavor != 0 && "Classic".equals(res.getString(flavor))) {
+                    accessibilityHelp();
+                    return;
+                }
+            } catch (PackageManager.NameNotFoundException | android.content.res.Resources.NotFoundException ignored) {
+                // If the other package changed during resolution, use the normal screen selection.
+            }
+        }
         tryScreen(accessibilityScreens(), 0);
     }
 
@@ -860,31 +919,32 @@ public class SettingsActivity extends Activity {
      * are skipped and well-known screens are tried by name as well.
      */
     private List<Intent> accessibilityScreens() {
-        Set<String> names = new HashSet<>();
+        // The stock Android TV screen first: on vendor firmwares their own settings app may answer
+        // the standard request too, and show nothing.
+        Set<String> names = new LinkedHashSet<>();
+        names.add("com.android.tv.settings/com.android.tv.settings.oemlink.AccessibilitySettingsActivity");
+        names.add("com.android.tv.settings/com.android.tv.settings.accessibility.AccessibilityActivity");
+        names.add("com.android.settings/com.android.settings.Settings$AccessibilitySettingsActivity");
         for (ResolveInfo ri : getPackageManager().queryIntentActivities(
                 new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS), 0)) {
             if (!ri.activityInfo.packageName.contains("stubs")) {
                 names.add(ri.activityInfo.packageName + "/" + ri.activityInfo.name);
             }
         }
-        List<Intent> out = new ArrayList<>();
-        for (String n : names) out.add(screen(n));
-        for (String n : new String[]{
-                "com.android.tv.settings/com.android.tv.settings.oemlink.AccessibilitySettingsActivity",
-                "com.android.tv.settings/com.android.tv.settings.accessibility.AccessibilityActivity",
-                "com.android.settings/com.android.settings.Settings$AccessibilitySettingsActivity"}) {
-            if (names.add(n)) out.add(screen(n));
-        }
-        // Vendor firmwares often have a second settings app with its own screen: look inside them too.
+        // Other settings apps, only by the name of the main screen: a loose match would also
+        // open its sub-screens, such as the captions.
         for (PackageInfo p : settingsApps()) {
             if (p.activities == null) continue;
             for (ActivityInfo a : p.activities) {
-                String n = p.packageName + "/" + a.name;
-                if (a.exported && a.enabled && a.name.toLowerCase().contains("accessib") && names.add(n)) {
-                    out.add(screen(n));
+                String n = a.name.toLowerCase();
+                if (a.exported && a.enabled && (n.endsWith("accessibilitysettingsactivity")
+                        || n.endsWith("accessibilityactivity") || n.endsWith("accessibilitysettings"))) {
+                    names.add(p.packageName + "/" + a.name);
                 }
             }
         }
+        List<Intent> out = new ArrayList<>();
+        for (String n : names) out.add(screen(n));
         return out;
     }
 
@@ -907,13 +967,19 @@ public class SettingsActivity extends Activity {
 
     /** Settings of the device. The standard request may land in a stub too, so a real app is preferred. */
     private void openDeviceSettings() {
+        PackageManager pm = getPackageManager();
+        // The stock Android TV settings first: vendor settings apps may hide this section.
+        Intent stock = pm.getLeanbackLaunchIntentForPackage("com.android.tv.settings");
+        if (stock != null) {
+            open(stock);
+            return;
+        }
         Intent standard = new Intent(Settings.ACTION_SETTINGS);
-        ResolveInfo ri = getPackageManager().resolveActivity(standard, 0);
+        ResolveInfo ri = pm.resolveActivity(standard, 0);
         if (ri != null && !ri.activityInfo.packageName.contains("stubs")) {
             open(standard);
             return;
         }
-        PackageManager pm = getPackageManager();
         for (PackageInfo p : settingsApps()) {
             Intent i = pm.getLeanbackLaunchIntentForPackage(p.packageName);
             if (i == null) i = pm.getLaunchIntentForPackage(p.packageName);
@@ -1007,7 +1073,10 @@ public class SettingsActivity extends Activity {
                         + "«Настройки устройства» или «Система».\n"
                         + "3. " + (on ? "Выключите" : "Включите") + " «" + getString(R.string.key_service_label) + "».")
                 .setPositiveButton("Открыть настройки", new DialogInterface.OnClickListener() {
-                    @Override public void onClick(DialogInterface d, int w) { openDeviceSettings(); }
+                    @Override public void onClick(DialogInterface d, int w) {
+                        prefs.setReturnAfterService(!prefs.serviceOn());
+                        openDeviceSettings();
+                    }
                 })
                 .setNeutralButton("Такого пункта нет", new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface d, int w) { computerHelp(); }
@@ -1021,10 +1090,13 @@ public class SettingsActivity extends Activity {
                 .setTitle("Если пункта нет")
                 .setMessage("Luch работает и без этого. Откройте его из списка приложений или сделайте "
                         + "главным экраном: шаг 1 в этих настройках.\n\n"
-                        + "Для опытных: если на устройстве включён ADB, выполните с компьютера\n"
+                        + "Если используете ADB, сначала прочитайте список включённых служб:\n"
+                        + "adb shell settings get secure enabled_accessibility_services\n\n"
+                        + "Для пустого списка (null) команды такие:\n"
                         + "adb shell settings put secure enabled_accessibility_services "
                         + new ComponentName(this, KeyService.class).flattenToString() + "\n"
-                        + "adb shell settings put secure accessibility_enabled 1")
+                        + "adb shell settings put secure accessibility_enabled 1\n\n"
+                        + "Если уже включены другие службы, сохраните их в списке и добавьте Luch через двоеточие.")
                 .setPositiveButton("Понятно", null)
                 .show();
     }
@@ -1091,12 +1163,6 @@ public class SettingsActivity extends Activity {
     /** A setup step: "done" is shown in the accent colour. */
     private void step(String title, String summary, String value, boolean done, Runnable r) {
         row(title, summary, value, done ? Ui.ACCENT : Ui.TEXT, r);
-    }
-
-    private boolean isOurHomeDefault() {
-        ResolveInfo ri = currentHome();
-        return ri != null && ri.activityInfo != null && getPackageName().equals(ri.activityInfo.packageName)
-                && ri.activityInfo.name.equals(prefs.home().getClassName());
     }
 
     private void section(String name) {

@@ -3,6 +3,7 @@ package com.local.tvlauncher;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -25,6 +26,7 @@ import android.provider.Settings;
 import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
@@ -57,8 +59,11 @@ public class HomeActivity extends Activity {
     private static final String ROW_ALL = "all";
     private static final int TAB_HOME = 0;
     private static final int TAB_APPS = 1;
-    /** Autostart only right after power-on, not when the launcher is opened later. */
-    private static final long AUTOSTART_WINDOW_MS = 5 * 60_000;
+    // PackageManager and the HOME role can still be settling when the first window appears.
+    private static final int[] AUTOSTART_DELAYS_MS = {800, 2500, 7000, 15000};
+    private int autostartAttempt;
+    private boolean autostartQueued;
+    private boolean resumedForAutostart;
     /** An app needs this many launches to show up under "Часто открываете". */
     private static final int OFTEN_MIN = 2;
 
@@ -70,7 +75,8 @@ public class HomeActivity extends Activity {
     private ImageView bakedView;
     private boolean bgReleased;
     private boolean hidden;
-    private long kenBurnsPausedUntil;
+    private ProjectorBeam projectorBeam;
+    private VideoWallpaper videoWallpaper;
     private Ambient ambient;
     private Ambient grainView;
     private TextView heroTitle;
@@ -81,11 +87,15 @@ public class HomeActivity extends Activity {
     private View homePane;
     private ScrollView appsPane;
     private LinearLayout grid;
+    private int gridWidthPx;
     private TextView appsTitle;
     private TextView pillHome;
     private TextView pillApps;
     private TextView pillSettings;
     private TextView network;
+    private TextView temperature;
+    private boolean temperatureRunning;
+    private int temperatureGeneration;
     private View idleOverlay;
 
     private int tab = TAB_HOME;
@@ -96,6 +106,7 @@ public class HomeActivity extends Activity {
     private boolean dimmed;
     private String focusTag;
     private boolean leaving;
+    private boolean recovering;
     private int themeOn;
     private long backgroundOn;
     private int marginOn;
@@ -108,6 +119,15 @@ public class HomeActivity extends Activity {
             dirty = true;
             softCache.clear();
             if (hasWindowFocus()) reload();
+            // A TV can finish installing or enabling the chosen app after our boot retries.
+            if (autostartAttempt == AUTOSTART_DELAYS_MS.length && i.getData() != null
+                    && !Intent.ACTION_PACKAGE_REMOVED.equals(i.getAction())) {
+                ComponentName selected = ComponentName.unflattenFromString(prefs.autostart());
+                if (selected != null && selected.getPackageName().equals(i.getData().getSchemeSpecificPart())) {
+                    autostartAttempt = 0;
+                    scheduleAutostart();
+                }
+            }
         }
     };
 
@@ -136,6 +156,62 @@ public class HomeActivity extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = new Prefs(this);
+        if (prefs.selfDisabled()) {
+            leaveFailedHome();
+            return;
+        }
+        if (!prefs.beginHomeStart()) {
+            leaveFailedHome();
+            return;
+        }
+        ((App) getApplication()).startingHome = this;
+        try {
+            createHome();
+        } catch (RuntimeException | LinkageError failure) {
+            android.util.Log.e("TvLauncher", "Home failed during startup", failure);
+            leaveFailedHome();
+        }
+    }
+
+    // An in-flight HOME intent may still reach us after our component was disabled.
+    private void leaveFailedHome() {
+        recovering = true;
+        finishStartup();
+        // Recheck after unlock: some stock launchers are invisible during Direct Boot.
+        prefs.setSelfDisabled(true);
+        Intent target = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
+        ComponentName resolved = target.resolveActivity(getPackageManager());
+        if (resolved != null && !getPackageName().equals(resolved.getPackageName())
+                && !resolved.getClassName().endsWith(".FallbackHome") && prefs.hasOtherHome()) {
+            try {
+                startActivity(target.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                finish();
+                return;
+            } catch (RuntimeException unavailable) {
+                android.util.Log.w("TvLauncher", "Alternative HOME unavailable", unavailable);
+            }
+        }
+        if (!isUnlocked()) {
+            finish();
+            return;
+        }
+        try {
+            startActivity(new Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (RuntimeException unavailable) {
+            startActivity(new Intent(this, SettingsActivity.class));
+        }
+        finish();
+    }
+
+    private void finishStartup() {
+        App app = (App) getApplication();
+        if (app.startingHome == this) {
+            app.startingHome = null;
+            prefs.completeHomeStart();
+        }
+    }
+
+    private void createHome() {
         themeOn = prefs.theme();
         Ui.apply(themeOn);
 
@@ -155,6 +231,7 @@ public class HomeActivity extends Activity {
             return;
         }
 
+        projectorBeam = new ProjectorBeam(prefs);
         backgroundOn = prefs.backgroundStamp();
         addBackground(root, true);
 
@@ -198,17 +275,20 @@ public class HomeActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        finishStartup();
         super.onDestroy();
         try {
             unregisterReceiver(dock == null ? unlocked : packagesChanged);
         } catch (Exception ignored) {
         }
+        setTemperatureRunning(false);
         handler.removeCallbacksAndMessages(null);
     }
 
     @Override
     protected void onStart() {
         super.onStart();
+        if (recovering) return;
         hidden = false;
         if (network != null) watchNetwork(true);
     }
@@ -216,6 +296,8 @@ public class HomeActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
+        finishStartup();
+        if (recovering) return;
         hidden = true;
         if (network != null) watchNetwork(false);
     }
@@ -223,7 +305,7 @@ public class HomeActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (dock == null) return;
+        if (recovering || dock == null) return;
         if (prefs.theme() != themeOn || prefs.backgroundStamp() != backgroundOn || prefs.safeMargin() != marginOn) {
             recreate();
             return;
@@ -234,12 +316,16 @@ public class HomeActivity extends Activity {
         restoreBackground();
         wake();
         animate(true);
-        maybeAutostart();
+        resumedForAutostart = true;
+        scheduleAutostart();
     }
 
     @Override
     protected void onPause() {
         super.onPause();
+        if (recovering) return;
+        resumedForAutostart = false;
+        cancelAutostart();
         handler.removeCallbacks(idle);
         animate(false);
         stopSlides();
@@ -248,6 +334,7 @@ public class HomeActivity extends Activity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (recovering) return;
         // Home pressed while already home: back to the first favorite.
         focusTag = null;
         if (dock != null) {
@@ -271,11 +358,20 @@ public class HomeActivity extends Activity {
                 return true;
             }
             restartIdleTimer();
-            // Moving across the tiles gets the whole GPU: the background holds still meanwhile.
-            if (ambient != null) ambient.pauseFor(900);
-            kenBurnsPausedUntil = SystemClock.uptimeMillis() + 900;
         }
         return super.dispatchKeyEvent(e);
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        if (idleOverlay != null) {
+            if (dimmed) {
+                if (event.getActionMasked() == MotionEvent.ACTION_UP) wake();
+                return true;
+            }
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) restartIdleTimer();
+        }
+        return super.dispatchTouchEvent(event);
     }
 
     private void leaveBootScreen() {
@@ -306,11 +402,12 @@ public class HomeActivity extends Activity {
             bannerBg.setAlpha(0f);
             root.addView(bannerBg, new FrameLayout.LayoutParams(-1, -1));
         } else if (async && (mode == Wallpaper.BEAM || mode == Wallpaper.BOKEH)) {
-            ambient = new Ambient(this, prefs.animFps(), mode == Wallpaper.BEAM, mode == Wallpaper.BOKEH, false);
-            ambient.beamStyle(prefs.beamBright(), prefs.beamFrom(), prefs.beamColor(), prefs.flicker());
-            ambient.beamDust(prefs.beamDust());
-            ambient.beamWidth(prefs.beamWidth());
+            ambient = new Ambient(this, prefs.animFps(), mode == Wallpaper.BEAM ? projectorBeam : null,
+                    mode == Wallpaper.BOKEH, false);
             root.addView(ambient, new FrameLayout.LayoutParams(-1, -1));
+        } else if (async && mode == Wallpaper.VIDEO) {
+            videoWallpaper = new VideoWallpaper(this, Uri.parse(prefs.videoUri()));
+            root.addView(videoWallpaper, new FrameLayout.LayoutParams(-1, -1));
         } else if (mode == Wallpaper.IMAGE && prefs.kenBurns()) {
             kenBurns = new ImageView(this);
             kenBurns.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -320,7 +417,7 @@ public class HomeActivity extends Activity {
         }
         if (mode != Wallpaper.BLACK) addBaked(root, async);
         if (async && prefs.grain()) {
-            grainView = new Ambient(this, prefs.animFps(), false, false, true);
+            grainView = new Ambient(this, prefs.animFps(), null, false, true);
             root.addView(grainView, new FrameLayout.LayoutParams(-1, -1));
         }
     }
@@ -352,6 +449,8 @@ public class HomeActivity extends Activity {
     /** Starts or stops everything that moves in the background. */
     private void animate(boolean on) {
         boolean run = on && !dimmed;
+        if (videoWallpaper != null) videoWallpaper.setRunning(run);
+        setTemperatureRunning(run && prefs.showTemperature());
         if (ambient != null) ambient.setRunning(run);
         if (grainView != null) grainView.setRunning(run);
         handler.removeCallbacks(kenBurnsTick);
@@ -366,14 +465,12 @@ public class HomeActivity extends Activity {
         @Override public void run() {
             if (kenBurns == null) return;
             long now = SystemClock.uptimeMillis();
-            if (now >= kenBurnsPausedUntil) {
-                double t = now / 1000.0;
-                float zoom = 1.06f + 0.06f * (float) Math.sin(t * 2 * Math.PI / 120);
-                kenBurns.setScaleX(zoom);
-                kenBurns.setScaleY(zoom);
-                kenBurns.setTranslationX(kenBurns.getWidth() * 0.025f * (float) Math.sin(t * 2 * Math.PI / 170));
-                kenBurns.setTranslationY(kenBurns.getHeight() * 0.015f * (float) Math.cos(t * 2 * Math.PI / 140));
-            }
+            double t = now / 1000.0;
+            float zoom = 1.06f + 0.06f * (float) Math.sin(t * 2 * Math.PI / 120);
+            kenBurns.setScaleX(zoom);
+            kenBurns.setScaleY(zoom);
+            kenBurns.setTranslationX(kenBurns.getWidth() * 0.025f * (float) Math.sin(t * 2 * Math.PI / 170));
+            kenBurns.setTranslationY(kenBurns.getHeight() * 0.015f * (float) Math.cos(t * 2 * Math.PI / 140));
             handler.postDelayed(this, 1000 / prefs.animFps());
         }
     };
@@ -527,6 +624,7 @@ public class HomeActivity extends Activity {
 
     private FrameLayout slideBox;
     private TextClock idleClock;
+    private Searchlight searchlight;
     private List<File> slides;
     private int slideIndex;
     private ImageView slideFront;
@@ -544,6 +642,8 @@ public class HomeActivity extends Activity {
         o.addView(slideBox, new FrameLayout.LayoutParams(-1, -1));
         idleClock = bigClock();
         o.addView(idleClock, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+        searchlight = new Searchlight(this, prefs, projectorBeam);
+        o.addView(searchlight, new FrameLayout.LayoutParams(-1, -1));
         o.setVisibility(View.GONE);
         o.setAlpha(0f);
         return o;
@@ -560,6 +660,10 @@ public class HomeActivity extends Activity {
         dimmed = true;
         animate(false);
         clockLayout(false);
+        boolean search = prefs.idleMode() == Prefs.IDLE_SEARCH;
+        idleClock.setVisibility(search ? View.GONE : View.VISIBLE);
+        searchlight.setVisibility(search ? View.VISIBLE : View.GONE);
+        if (search) searchlight.restart();
         idleOverlay.setVisibility(View.VISIBLE);
         idleOverlay.animate().alpha(1f).setDuration(1200).start();
         if (prefs.idleMode() == Prefs.IDLE_SLIDES) startSlides();
@@ -688,7 +792,15 @@ public class HomeActivity extends Activity {
     @Override
     public void onWindowFocusChanged(boolean has) {
         super.onWindowFocusChanged(has);
-        if (has) restartIdleTimer(); else handler.removeCallbacks(idle);
+        if (recovering) return;
+        if (has) {
+            restartIdleTimer();
+            scheduleAutostart();
+            finishStartup();
+        } else {
+            handler.removeCallbacks(idle);
+            cancelAutostart();
+        }
     }
 
     // ================================================================= top bar
@@ -723,6 +835,11 @@ public class HomeActivity extends Activity {
         network = Ui.text(this, 13, Ui.TEXT_DIM, false);
         network.setPadding(Ui.dp(this, 12), 0, 0, 0);
         line.addView(network);
+        temperature = Ui.text(this, 13, Ui.TEXT_DIM, false);
+        temperature.setPadding(Ui.dp(this, 10), 0, 0, 0);
+        temperature.setText("— °C");
+        temperature.setVisibility(View.GONE);
+        line.addView(temperature);
         clock.addView(line);
         bar.addView(clock, new LinearLayout.LayoutParams(0, -2, 1));
 
@@ -792,6 +909,31 @@ public class HomeActivity extends Activity {
         network.setTextColor(internet ? Ui.TEXT_DIM : Color.rgb(255, 190, 90));
     }
 
+    private void setTemperatureRunning(boolean on) {
+        if (temperature == null) return;
+        temperature.setVisibility(prefs.showTemperature() ? View.VISIBLE : View.GONE);
+        if (on == temperatureRunning) return;
+        temperatureRunning = on;
+        temperatureGeneration++;
+        handler.removeCallbacks(pollTemperature);
+        if (on) pollTemperature.run();
+    }
+
+    private final Runnable pollTemperature = new Runnable() {
+        @Override public void run() {
+            final int generation = temperatureGeneration;
+            new Thread(() -> {
+                ProjectorTemperature.Reading reading = ProjectorTemperature.read(getApplicationContext());
+                handler.post(() -> {
+                    if (!temperatureRunning || temperatureGeneration != generation || isDestroyed()) return;
+                    temperature.setText(reading.displayText());
+                    temperature.setContentDescription(reading.description());
+                    handler.postDelayed(this, 60_000);
+                });
+            }, "projector-temperature").start();
+        }
+    };
+
     private void setTab(int t, boolean focus) {
         tab = t;
         homePane.setVisibility(t == TAB_HOME ? View.VISIBLE : View.GONE);
@@ -841,9 +983,11 @@ public class HomeActivity extends Activity {
         dock.setClipToPadding(false);
         // Room above and below for the focused tile, which grows by 10%.
         int pad = Ui.dp(this, 10);
-        dock.setPadding(0, pad, Ui.dp(this, 32), pad);
+        dock.setPadding(0, pad, 0, pad);
         dockScroll.addView(dock);
-        pane.addView(dockScroll, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams dockParams = new LinearLayout.LayoutParams(-1, -2);
+        dockParams.rightMargin = Ui.dp(this, 48);
+        pane.addView(dockScroll, dockParams);
         return pane;
     }
 
@@ -853,7 +997,7 @@ public class HomeActivity extends Activity {
         List<String> chips = new ArrayList<>();
         if (Apps.HDMI.equals(app.component)) chips.add("Вход");
         else chips.add(app.leanback ? "ТВ-приложение" : "Приложение");
-        if (app.component.equals(prefs.autostart())) chips.add("Запуск при включении");
+        if (Apps.sameAutostartApp(prefs.autostart(), app.component)) chips.add("Запуск при включении");
         for (String c : chips) {
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
             lp.setMargins(0, 0, Ui.dp(this, 8), 0);
@@ -882,6 +1026,16 @@ public class HomeActivity extends Activity {
         grid.setClipChildren(false);
         grid.setClipToPadding(false);
         box.addView(grid);
+        grid.addOnLayoutChangeListener((v, left, top, right, bottom, ol, ot, or, ob) -> {
+            if (right > left && right - left != gridWidthPx && tab == TAB_APPS && !apps.isEmpty()) {
+                grid.post(() -> {
+                    if (!isDestroyed() && grid.getWidth() != gridWidthPx) {
+                        buildGrid();
+                        restoreFocus();
+                    }
+                });
+            }
+        });
         scroll.addView(box);
         return scroll;
     }
@@ -948,7 +1102,25 @@ public class HomeActivity extends Activity {
         }
         dockLabel.setText(noFavs ? "Приложения" : "Избранное");
         dock.removeAllViews();
-        fill(dock, dockApps, noFavs ? ROW_DOCK : ROW_FAV, tileH(), 16);
+        boolean labels = !prefs.hideNames();
+        heroTitle.setVisibility(labels ? View.VISIBLE : View.GONE);
+        heroChips.setVisibility(labels ? View.VISIBLE : View.GONE);
+        String row = noFavs ? ROW_DOCK : ROW_FAV;
+        int height = tileH();
+        int columns = prefs.tilesPerRow();
+        if (prefs.twoRows() && dockApps.size() > columns) {
+            dock.setOrientation(LinearLayout.VERTICAL);
+            List<Apps.App> top = new ArrayList<>(), bottom = new ArrayList<>();
+            for (int i = 0; i < dockApps.size(); i++) {
+                (i / columns % 2 == 0 ? top : bottom).add(dockApps.get(i));
+            }
+            dock.addView(gridLine(top, row, height, TILE_GAP));
+            dock.addView(gridLine(bottom, row, height, TILE_GAP));
+        } else {
+            dock.setOrientation(LinearLayout.HORIZONTAL);
+            fill(dock, dockApps, row, height, TILE_GAP);
+        }
+        if (labels && !dockApps.isEmpty()) showHero(dockApps.get(0));
 
         // The grid is built only when its tab is open: less work on every return home.
         gridDirty = true;
@@ -958,8 +1130,18 @@ public class HomeActivity extends Activity {
     }
 
     /** Height of the tiles, the same in the dock and in the grid. */
+    private static final int TILE_GAP = 22;
+
+    private int tileAreaWidth() {
+        int screen = getWindow().getDecorView().getWidth();
+        if (screen <= 0) screen = getResources().getDisplayMetrics().widthPixels;
+        return screen - 2 * (Ui.dp(this, 48) + screen * prefs.safeMargin() / 100);
+    }
+
     private int tileH() {
-        return (int) Math.min(100, Ui.heightDp(this) * 0.14f);
+        int cols = prefs.tilesPerRow();
+        float width = (tileAreaWidth() - (cols - 1) * Ui.dp(this, TILE_GAP)) / (float) cols;
+        return Math.max(1, Math.round(width * 9f / 16f / getResources().getDisplayMetrics().density));
     }
 
     private List<Apps.App> visible() {
@@ -987,24 +1169,32 @@ public class HomeActivity extends Activity {
         grid.removeAllViews();
         List<Apps.App> all = visible();
         int gridH = tileH();
-        float tileW = gridH * 16 / 9f;
-        int gap = 22;
-        int cols = Math.max(1, (int) ((Ui.widthDp(this) - 96 + gap) / (tileW + gap)));
+        int gap = TILE_GAP;
+        gridWidthPx = grid.getWidth() > 0 ? grid.getWidth() : tileAreaWidth();
+        int cols = prefs.tilesPerRow();
+        int limit = cols * (prefs.twoRows() ? 2 : 1);
 
         List<Apps.App> often = new ArrayList<>();
         for (Apps.App a : byUsage(all)) {
-            if (often.size() >= cols || prefs.launches(a.component) < OFTEN_MIN) break;
+            if (often.size() >= limit || prefs.launches(a.component) < OFTEN_MIN) break;
             often.add(a);
         }
         if (!often.isEmpty()) {
             grid.addView(gridCaption("Часто открываете"));
-            grid.addView(gridLine(often, ROW_OFTEN, gridH, gap));
+            for (int i = 0; i < often.size(); i += cols) {
+                addGridRow(often, i, cols, ROW_OFTEN, gridH, gap);
+            }
             grid.addView(gridCaption("Все приложения · " + all.size()));
         }
         appsTitle.setText("Все приложения · " + all.size());
         for (int i = 0; i < all.size(); i += cols) {
-            grid.addView(gridLine(all.subList(i, Math.min(all.size(), i + cols)), ROW_ALL, gridH, gap));
+            addGridRow(all, i, cols, ROW_ALL, gridH, gap);
         }
+    }
+
+    private void addGridRow(List<Apps.App> apps, int start, int cols, String section, int tileH, int gap) {
+        LinearLayout line = gridLine(apps.subList(start, Math.min(start + cols, apps.size())), section, tileH, gap);
+        grid.addView(line);
     }
 
     private TextView gridCaption(String s) {
@@ -1026,12 +1216,18 @@ public class HomeActivity extends Activity {
 
     private void fill(LinearLayout line, List<Apps.App> list, final String row, int tileH, int gapDp) {
         final boolean inGrid = ROW_ALL.equals(row) || ROW_OFTEN.equals(row);
-        for (final Apps.App a : list) {
-            View card = Ui.tile(this, a, tileH, new View.OnFocusChangeListener() {
+        int cols = prefs.tilesPerRow(), gapPx = Ui.dp(this, gapDp);
+        int area = inGrid ? gridWidthPx : tileAreaWidth();
+        int pixels = Math.max(cols, area - (cols - 1) * gapPx);
+        for (int i = 0; i < list.size(); i++) {
+            final Apps.App a = list.get(i);
+            View card = Ui.tile(this, a, tileH, prefs.hideNames(), new View.OnFocusChangeListener() {
                 @Override public void onFocusChange(View v, boolean has) {
                     if (!has) return;
-                    if (inGrid) appsTitle.setText(a.label);
-                    else showHero(a);
+                    if (!prefs.hideNames()) {
+                        if (inGrid) appsTitle.setText(a.label);
+                        else showHero(a);
+                    }
                     showBannerBackground(a);
                 }
             });
@@ -1057,7 +1253,9 @@ public class HomeActivity extends Activity {
                 }
             });
             LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) card.getLayoutParams();
-            lp.setMargins(0, 0, Ui.dp(this, gapDp), 0);
+            lp.width = pixels / cols + (i % cols < pixels % cols ? 1 : 0);
+            lp.height = Math.round(lp.width * 9f / 16f);
+            lp.setMargins(0, 0, i + 1 < list.size() ? gapPx : 0, 0);
             line.addView(card, lp);
         }
     }
@@ -1106,7 +1304,7 @@ public class HomeActivity extends Activity {
     private void showOptions(final Apps.App a, final String row) {
         final boolean hdmi = Apps.HDMI.equals(a.component);
         final boolean fav = prefs.isFavorite(a.component);
-        final boolean auto = a.component.equals(prefs.autostart());
+        final boolean auto = Apps.sameAutostartApp(prefs.autostart(), a.component);
         final boolean inGrid = ROW_ALL.equals(row) || ROW_OFTEN.equals(row);
 
         final List<String> labels = new ArrayList<>();
@@ -1189,16 +1387,31 @@ public class HomeActivity extends Activity {
 
     // ============================================================== autostart
 
-    private void maybeAutostart() {
-        final String comp = prefs.autostart();
-        // Just looking around: opening some other app would only get in the way.
-        if (comp.isEmpty() || !prefs.isSetUp()) return;
-        if (SystemClock.elapsedRealtime() > AUTOSTART_WINDOW_MS) return;
-        if (!prefs.claimAutostartForThisBoot()) return;
-        handler.postDelayed(new Runnable() {
-            @Override public void run() {
-                Apps.launch(HomeActivity.this, comp);
-            }
-        }, 800);
+    private void scheduleAutostart() {
+        if (!resumedForAutostart || !hasWindowFocus() || autostartQueued
+                || autostartAttempt == AUTOSTART_DELAYS_MS.length
+                || prefs.autostart().isEmpty() || prefs.autostartHandled() || prefs.selfDisabled()) return;
+        autostartQueued = true;
+        handler.postDelayed(autostart, AUTOSTART_DELAYS_MS[autostartAttempt]);
     }
+
+    private void cancelAutostart() {
+        handler.removeCallbacks(autostart);
+        autostartQueued = false;
+    }
+
+    private final Runnable autostart = new Runnable() {
+        @Override public void run() {
+            autostartQueued = false;
+            String selected = prefs.autostart();
+            if (!resumedForAutostart || !hasWindowFocus() || selected.isEmpty()
+                    || prefs.autostartHandled() || prefs.selfDisabled()) return;
+            autostartAttempt++;
+            if (prefs.isSetUp() && Apps.launchOnBoot(HomeActivity.this, selected)) {
+                prefs.markAutostartHandled();
+            } else {
+                scheduleAutostart();
+            }
+        }
+    };
 }

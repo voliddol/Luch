@@ -21,17 +21,18 @@ import java.util.List;
  */
 final class Wallpaper {
     static final String[] MODES = {"Чёрный", "Свечение цвета темы", "Размытый баннер приложения", "Своя картинка",
-            "Луч проектора (анимация)", "Огни зала (анимация)"};
+            "Луч проектора (анимация)", "Огни зала (анимация)", "Видео с устройства"};
     static final int BLACK = 0;
     static final int GLOW = 1;
     static final int BANNER = 2;
     static final int IMAGE = 3;
     static final int BEAM = 4;
     static final int BOKEH = 5;
+    static final int VIDEO = 6;
 
     /** Modes whose picture changes on screen; only the shades are baked for them. */
     static boolean live(int mode) {
-        return mode == BANNER || mode == BEAM || mode == BOKEH;
+        return mode == BANNER || mode == BEAM || mode == BOKEH || mode == VIDEO;
     }
 
     private static final String[] EXT = {".jpg", ".jpeg", ".png", ".webp"};

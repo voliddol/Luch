@@ -20,12 +20,14 @@ import java.util.Set;
  * can read them before the user is unlocked.
  */
 final class Prefs {
+    private static final String UNFINISHED_HOME_STARTS = "unfinished_home_starts";
     static final String WHALE = "com.zeasn.whale.saas";
 
     private static final String FAVORITES = "favorites";
     private static final String HIDDEN = "hidden";
     private static final String AUTOSTART = "autostart";
     private static final String AUTOSTART_BOOT = "autostart_boot";
+    private static final String AUTOSTART_BOOT_COUNT = "autostart_boot_count";
     private static final String HDMI = "hdmi";
     private static final String INTERCEPT_HOME = "intercept_home";
     private static final String REPLACE_STOCK = "replace_stock";
@@ -36,6 +38,11 @@ final class Prefs {
     private static final String GRAIN = "grain";
     private static final String ANIM_FPS = "anim_fps";
     private static final String MARGIN = "safe_margin";
+    private static final String HIDE_NAMES = "hide_app_names";
+    private static final String TILE_SIZE = "tile_size";
+    private static final String TWO_ROWS = "two_app_rows";
+    private static final String TEMPERATURE = "show_led_temperature";
+    private static final String VIDEO_URI = "wallpaper_video_uri";
     private static final String BEAM_BRIGHT = "beam_bright";
     private static final String BEAM_FROM = "beam_from";
     private static final String BEAM_COLOR = "beam_color";
@@ -50,6 +57,7 @@ final class Prefs {
     private static final String BACKGROUND_STAMP = "background_stamp";
     private static final String THEME = "theme";
     private static final String CRASHES = "crashes";
+    private static final String CRASH_BOOT = "crashes_boot";
     private static final String EARLY_AUTO_OFF = "early_auto_off";
     private static final String SELF_DISABLED = "self_disabled";
 
@@ -136,19 +144,31 @@ final class Prefs {
     }
 
     void setAutostart(String component) {
-        sp.edit().putString(AUTOSTART, component == null ? "" : component).apply();
+        // A choice made in settings applies on the next boot, not on return to Home.
+        String selected = component == null ? "" : component;
+        if (selected.equals(autostart())) return;
+        writeAutostartBoot(sp.edit().putString(AUTOSTART, selected));
+        changed();
     }
 
-    /**
-     * True once per boot: the first caller after a boot gets true, later callers false.
-     * A boot is identified by its start time, which stays stable within a few seconds.
-     */
-    boolean claimAutostartForThisBoot() {
-        long bootStart = System.currentTimeMillis() - SystemClock.elapsedRealtime();
+    /** Prefer the system boot count so correcting the clock does not replay a launch. */
+    boolean autostartHandled() {
+        int boot = bootCount();
+        int recorded = sp.getInt(AUTOSTART_BOOT_COUNT, -1);
+        if (boot >= 0 && recorded >= 0) return recorded == boot;
+        // Old installations only have this estimate. Keep it for devices hiding BOOT_COUNT.
         long last = sp.getLong(AUTOSTART_BOOT, 0);
-        if (Math.abs(bootStart - last) < 60_000) return false;
-        sp.edit().putLong(AUTOSTART_BOOT, bootStart).apply();
-        return true;
+        long bootStart = System.currentTimeMillis() - SystemClock.elapsedRealtime();
+        return last != 0 && Math.abs(bootStart - last) < 60_000;
+    }
+
+    void markAutostartHandled() {
+        writeAutostartBoot(sp.edit());
+    }
+
+    private void writeAutostartBoot(SharedPreferences.Editor edit) {
+        edit.putInt(AUTOSTART_BOOT_COUNT, bootCount())
+                .putLong(AUTOSTART_BOOT, System.currentTimeMillis() - SystemClock.elapsedRealtime()).commit();
     }
 
     // --------------------------------------------------------------- toggles
@@ -203,6 +223,7 @@ final class Prefs {
     void countLaunch(String component) {
         SharedPreferences u = usage();
         u.edit().putInt(component, u.getInt(component, 0) + 1).apply();
+        changed();
     }
 
     int launches(String component) {
@@ -217,6 +238,20 @@ final class Prefs {
 
     static final int[] IDLE_MINUTES = {0, 1, 3, 5, 10};
     static final int[] MARGINS = {0, 2, 4, 6};
+    static final String[] TILE_SIZES = {"6 в ряд", "5 в ряд", "4 в ряд"};
+
+    boolean hideNames() { return sp.getBoolean(HIDE_NAMES, false); }
+    void setHideNames(boolean value) { sp.edit().putBoolean(HIDE_NAMES, value).apply(); changed(); }
+
+    int tileSize() { return Math.max(0, Math.min(2, sp.getInt(TILE_SIZE, 0))); }
+    int tilesPerRow() { return 6 - tileSize(); }
+    void setTileSize(int value) { sp.edit().putInt(TILE_SIZE, value).apply(); changed(); }
+
+    boolean twoRows() { return sp.getBoolean(TWO_ROWS, false); }
+    void setTwoRows(boolean value) { sp.edit().putBoolean(TWO_ROWS, value).apply(); changed(); }
+
+    boolean showTemperature() { return sp.getBoolean(TEMPERATURE, false); }
+    void setShowTemperature(boolean value) { sp.edit().putBoolean(TEMPERATURE, value).apply(); changed(); }
 
     /** Minutes without a key press before the menu dims to a clock; 0 = never. */
     int idleMinutes() {
@@ -270,9 +305,10 @@ final class Prefs {
         changed();
     }
 
-    static final String[] IDLE_MODES = {"Часы на чёрном", "Слайд-шоу из галереи"};
+    static final String[] IDLE_MODES = {"Часы на чёрном", "Слайд-шоу из галереи", "Луч ищет часы"};
     static final int IDLE_CLOCK = 0;
     static final int IDLE_SLIDES = 1;
+    static final int IDLE_SEARCH = 2;
 
     int idleMode() {
         return sp.getInt(IDLE_MODE, IDLE_CLOCK);
@@ -284,26 +320,30 @@ final class Prefs {
     }
 
     // Projector beam look; indexes into the lists in {@link Ambient}.
+    static final int DEFAULT_BEAM_BRIGHT = 1, DEFAULT_BEAM_FROM = 0, DEFAULT_BEAM_COLOR = 0;
+    static final int DEFAULT_BEAM_WIDTH = 1, DEFAULT_BEAM_DUST = 2;
+    static final boolean DEFAULT_FLICKER = true;
+
     int beamBright() {
-        return sp.getInt(BEAM_BRIGHT, 1);
+        return sp.getInt(BEAM_BRIGHT, DEFAULT_BEAM_BRIGHT);
     }
 
     int beamFrom() {
-        return sp.getInt(BEAM_FROM, 0);
+        return sp.getInt(BEAM_FROM, DEFAULT_BEAM_FROM);
     }
 
     int beamColor() {
-        return sp.getInt(BEAM_COLOR, 0);
+        return sp.getInt(BEAM_COLOR, DEFAULT_BEAM_COLOR);
     }
 
     /** Faint shutter flicker of a film projector in the beam. */
     boolean flicker() {
-        return sp.getBoolean(FLICKER, true);
+        return sp.getBoolean(FLICKER, DEFAULT_FLICKER);
     }
 
     /** Index into {@link Ambient#WIDTHS}. */
     int beamWidth() {
-        return sp.getInt(BEAM_WIDTH, 1);
+        return sp.getInt(BEAM_WIDTH, DEFAULT_BEAM_WIDTH);
     }
 
     void setBeamWidth(int width) {
@@ -313,7 +353,7 @@ final class Prefs {
 
     /** Index into {@link Ambient#DUST}. */
     int beamDust() {
-        return sp.getInt(BEAM_DUST, 2);
+        return sp.getInt(BEAM_DUST, DEFAULT_BEAM_DUST);
     }
 
     void setBeamDust(int amount) {
@@ -353,6 +393,14 @@ final class Prefs {
         return sp.getLong(BACKGROUND_STAMP, 0) + background();
     }
 
+    String videoUri() { return sp.getString(VIDEO_URI, ""); }
+
+    void setVideo(String uri) {
+        sp.edit().putString(VIDEO_URI, uri).putInt(BACKGROUND, Wallpaper.VIDEO)
+                .putLong(BACKGROUND_STAMP, System.currentTimeMillis()).apply();
+        changed();
+    }
+
     static int version() {
         return version;
     }
@@ -363,54 +411,95 @@ final class Prefs {
 
     // --------------------------------------------------------------- crashes
 
-    /** Synchronous: the process is about to die. Uses the uptime clock, which restarts at boot. */
-    void recordCrash() {
-        long now = SystemClock.elapsedRealtime();
-        StringBuilder sb = new StringBuilder();
+    private int bootCount() {
+        try {
+            return Settings.Global.getInt(ctx.getContentResolver(), Settings.Global.BOOT_COUNT, -1);
+        } catch (SecurityException denied) {
+            return -1;
+        }
+    }
+
+    /** Old APKs saved uptime alone. Similar uptimes on separate days must not disable HOME. */
+    private List<Long> recentCrashes(int boot, long now) {
+        List<Long> recent = new ArrayList<>();
+        if (sp.getInt(CRASH_BOOT, -2) != boot) return recent;
         for (String s : sp.getString(CRASHES, "").split(",")) {
             if (s.isEmpty()) continue;
-            long t = Long.parseLong(s);
-            if (t <= now && now - t < CRASH_WINDOW_MS) sb.append(t).append(',');
+            try {
+                long t = Long.parseLong(s);
+                if (t <= now && now - t < CRASH_WINDOW_MS) recent.add(t);
+            } catch (NumberFormatException ignored) {
+                // Ignore an invalid entry without losing the rest of the crash history.
+            }
         }
+        return recent;
+    }
+
+    /** Synchronous: the process is about to die. Use wall time only if boot count is unavailable. */
+    void recordCrash() {
+        int boot = bootCount();
+        long now = boot >= 0 ? SystemClock.elapsedRealtime() : System.currentTimeMillis();
+        StringBuilder sb = new StringBuilder();
+        for (long t : recentCrashes(boot, now)) sb.append(t).append(',');
         sb.append(now);
-        sp.edit().putString(CRASHES, sb.toString()).commit();
+        sp.edit().putInt(CRASH_BOOT, boot).putString(CRASHES, sb.toString()).commit();
     }
 
     boolean tooManyCrashes() {
-        long now = SystemClock.elapsedRealtime();
-        int n = 0;
-        for (String s : sp.getString(CRASHES, "").split(",")) {
-            if (s.isEmpty()) continue;
-            long t = Long.parseLong(s);
-            if (t <= now && now - t < CRASH_WINDOW_MS) n++;
-        }
-        return n >= CRASH_LIMIT;
+        int boot = bootCount();
+        long now = boot >= 0 ? SystemClock.elapsedRealtime() : System.currentTimeMillis();
+        return recentCrashes(boot, now).size() >= CRASH_LIMIT;
     }
 
     void clearCrashes() {
-        sp.edit().remove(CRASHES).commit();
+        sp.edit().remove(CRASHES).remove(CRASH_BOOT).remove(UNFINISHED_HOME_STARTS).commit();
     }
 
-    /**
-     * The crash guard took this launcher out of the home role: both home activities are disabled
-     * and the key service stays passive. Turning it back on restores the regular home activity.
-     */
+    /** Survives process death even when Android cannot invoke a Java exception handler. */
+    boolean beginHomeStart() {
+        int previous = sp.getInt(UNFINISHED_HOME_STARTS, 0);
+        if (previous >= CRASH_LIMIT) return false;
+        sp.edit().putInt(UNFINISHED_HOME_STARTS, previous + 1).commit();
+        return true;
+    }
+
+    void completeHomeStart() {
+        sp.edit().remove(UNFINISHED_HOME_STARTS).commit();
+    }
+
+    /** Recovery mode also makes the key service and autostart passive. */
     boolean selfDisabled() {
         return sp.getBoolean(SELF_DISABLED, false);
     }
 
     void setSelfDisabled(boolean off) {
-        sp.edit().putBoolean(SELF_DISABLED, off).commit();
         PackageManager pm = ctx.getPackageManager();
         int no = PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
-        if (off) {
-            pm.setComponentEnabledSetting(regular(), no, PackageManager.DONT_KILL_APP);
-            pm.setComponentEnabledSetting(early(), no, PackageManager.DONT_KILL_APP);
-        } else {
-            pm.setComponentEnabledSetting(regular(), PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-                    PackageManager.DONT_KILL_APP);
-            pm.setComponentEnabledSetting(early(), no, PackageManager.DONT_KILL_APP);
+        // Persist passive mode before changing HOME. On manual restore, clear it last.
+        if (off) sp.edit().putBoolean(SELF_DISABLED, true).putBoolean(RETURN_AFTER_SERVICE, false).commit();
+        boolean keepRegular = !off || !hasOtherHome();
+        pm.setComponentEnabledSetting(regular(), keepRegular ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED : no,
+                PackageManager.DONT_KILL_APP);
+        pm.setComponentEnabledSetting(early(), no, PackageManager.DONT_KILL_APP);
+        if (!off) sp.edit().putBoolean(SELF_DISABLED, false).commit();
+    }
+
+    boolean hasOtherHome() {
+        Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
+        // The normal stock launcher may become launchable only after user storage unlocks.
+        int flags = PackageManager.MATCH_DEFAULT_ONLY | PackageManager.MATCH_DIRECT_BOOT_AWARE
+                | PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+        for (ResolveInfo ri : ctx.getPackageManager().queryIntentActivities(home, flags)) {
+            if (ri.activityInfo == null || !ri.activityInfo.exported) continue;
+            if (ri.activityInfo.permission != null && ctx.checkSelfPermission(ri.activityInfo.permission)
+                    != PackageManager.PERMISSION_GRANTED) continue;
+            String pkg = ri.activityInfo.packageName;
+            if (pkg.equals(ctx.getPackageName()) || pkg.equals("android") || pkg.contains("setupwizard")
+                    || pkg.equals("com.android.provision")) continue;
+            if (!ri.activityInfo.name.endsWith(".FallbackHome") && (ri.activityInfo.targetActivity == null
+                    || !ri.activityInfo.targetActivity.endsWith(".FallbackHome"))) return true;
         }
+        return false;
     }
 
     /** Early boot was switched off by the crash guard; shown once in settings. */
@@ -428,7 +517,8 @@ final class Prefs {
     boolean isDefaultHome() {
         ResolveInfo ri = ctx.getPackageManager().resolveActivity(
                 new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), PackageManager.MATCH_DEFAULT_ONLY);
-        return ri != null && ri.activityInfo != null && ctx.getPackageName().equals(ri.activityInfo.packageName);
+        return ri != null && ri.activityInfo != null && home().equals(
+                new ComponentName(ri.activityInfo.packageName, ri.activityInfo.name));
     }
 
     boolean serviceOn() {

@@ -60,7 +60,7 @@ Run "$bt\aapt2.exe" link -o "$out\unsigned.apk" -I $jar --manifest "$here\Androi
     --java "$out\gen" --min-sdk-version 24 --target-sdk-version 29 "$out\res.zip"
 
 $sources = @(Get-ChildItem -Recurse "$here\src", "$out\gen" -Filter *.java | ForEach-Object FullName)
-Run javac -nowarn -encoding UTF-8 -source 1.8 -target 1.8 -bootclasspath $jar -d "$out\classes" @sources
+Run javac -nowarn -encoding UTF-8 -source 1.8 -target 1.8 -bootclasspath "$jar;$bt\core-lambda-stubs.jar" -d "$out\classes" @sources
 
 # One jar instead of a list of .class files: the list no longer fits on a Windows command line.
 Run jar cf "$out\classes.jar" -C "$out\classes" .
@@ -87,7 +87,7 @@ if (-not (Test-Path $ks)) {
     Run keytool -genkeypair -keystore $ks -storepass tvlauncher -keypass tvlauncher -alias tvlauncher `
         -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=TV Launcher'
 }
-Run "$bt\apksigner.bat" sign --ks $ks --ks-pass pass:tvlauncher --key-pass pass:tvlauncher `
+Run "$bt\apksigner.bat" sign --v1-signing-enabled false --ks $ks --ks-pass pass:tvlauncher --key-pass pass:tvlauncher `
     --out "$here\TVLauncher.apk" "$out\aligned.apk"
 
 Write-Host "Готово: $here\TVLauncher.apk"

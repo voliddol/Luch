@@ -55,15 +55,19 @@ final class Backdrop {
             }
         }
 
+        drawShades(canvas, mode, w, h);
+        cached = out;
+        cachedKey = key;
+        return out;
+    }
+
+    static void drawShades(Canvas canvas, int mode, int w, int h) {
         // The beam is light in a dark hall: lighter shades, or they would hide most of it.
         float k = mode == Wallpaper.BEAM ? 0.6f : 1f;
         shade(canvas, GradientDrawable.Orientation.LEFT_RIGHT, 0.85f * k, 0, 0, w * 65 / 100, h);
         shade(canvas, GradientDrawable.Orientation.BOTTOM_TOP, 0.95f, 0, h - h * 60 / 100, w, h);
         shade(canvas, GradientDrawable.Orientation.TOP_BOTTOM, 0.55f * k * k, 0, 0, w, h / 4);
 
-        cached = out;
-        cachedKey = key;
-        return out;
     }
 
     /** Forget the cached bitmap, so its memory can be returned to the system. */
